@@ -13,13 +13,13 @@ const PORT = process.env.PORT || 3000;
 // Variables de configuración del servicio externo
 const TOKEN_LEDER = process.env.TOKEN_LEDER;
 
-// ✅ URL base (desde secrets / env)
-const URL_BASE1 = process.env.URL_BASE1; // https://bankend-tlgm-2p.fly.dev
-const URL_BASE2 = process.env.URL_BASE2;
+// ✅ Proveedor Ecuador (desde secrets / env de Fly.io)
+const PROVEEDOR_ECUADOR = (process.env.PROVEEDOR_ECUADOR || "").replace(/\/+$/, ""); // https://api.ecuadorapi.com/api/v1
+const TOKEN_ECUADOR = process.env.TOKEN_ECUADOR;
 
-if (!URL_BASE1 || !URL_BASE2) {
+if (!PROVEEDOR_ECUADOR || !TOKEN_ECUADOR) {
   console.error(
-    "❌ ERROR: Variables URL_BASE1 y URL_BASE2 deben estar configuradas en secrets/.env"
+    "❌ ERROR: Variables PROVEEDOR_ECUADOR y TOKEN_ECUADOR deben estar configuradas en secrets/.env"
   );
   process.exit(1);
 }
@@ -465,10 +465,8 @@ const VOLATILE_ENDPOINTS = new Set([
   "/consumos",
   "/telefonia-num",
   "/telefonia-doc",
-  "/azura_bitel",
-  "/azura_claro",
-  "/azura_entel",
-  "/azura_movistar",
+  "/multas",
+  "/placa_pendientes_ant",
 ]);
 
 // Set para bloquear llamadas duplicadas simultáneas al mismo key
@@ -794,140 +792,82 @@ const fetchFromExternalArbolAPI = async (req, res, id) => {
 };
 
 /* ============================
-   Helper genérico para APIs externas GET con caché
-   Flujo: 1) cache → 2) fetch GET → 3) validar → 4) save cache → 5) return
+   Helper para el proveedor Ecuador (GET + Bearer) con caché Upstash
+   Flujo: 1) validar → 2) caché → 3) anti-duplicado → 4) proveedor → 5) guardar caché → 6) responder
 ============================ */
 
-const fetchExternalGetWithCache = async ({
-  req,
-  res,
-  baseUrl,
-  externalPath,
-  queryParam,
-  required = true,
-  cacheParamName = null,
-}) => {
-  const paramNameForCache = cacheParamName || queryParam;
-  const value = req.query[queryParam];
+const ecuadorClient = axios.create({
+  baseURL: PROVEEDOR_ECUADOR,
+  timeout: 60000,
+  headers: {
+    Authorization: `Bearer ${TOKEN_ECUADOR}`,
+    Accept: "application/json",
+  },
+});
 
-  if (required && (!value || String(value).trim() === "")) {
-    return res
-      .status(400)
-      .json({ success: false, message: `${queryParam} requerido` });
-  }
+const ecuadorEndpoint = ({ queryParam, validate, buildPath, invalidMessage }) => {
+  return async (req, res) => {
+    const raw = req.query[queryParam];
+    const id = raw === undefined || raw === null ? "" : String(raw).trim().toUpperCase();
 
-  const id = String(value).trim();
-  const cacheKey = generateCacheKey(req.path, id, paramNameForCache);
-
-  // 1) Buscar en el sistema de caché
-  const cached = await getFromCache(cacheKey);
-  if (cached) {
-    return res.status(200).json(cached);
-  }
-
-  // 2) Protección anti-duplicado
-  if (inflightKeys.has(cacheKey)) {
-    console.log(`⏳ [INFLIGHT] Llamada duplicada detectada para: ${cacheKey}, esperando...`);
-    await new Promise((r) => setTimeout(r, 800));
-    const retryCache = await getFromCache(cacheKey);
-    if (retryCache) return res.status(200).json(retryCache);
-  }
-
-  inflightKeys.add(cacheKey);
-
-  // 3) Llamar API externa GET
-  const url = `${baseUrl}${externalPath}`;
-  try {
-    console.log(`🔗 Llamando a API Externa: ${url} (${queryParam}=${id})`);
-    const response = await axios.get(url, {
-      params: { [queryParam]: id },
-    });
-
-    const data = response.data;
-    const ttl = getTTL(req.path);
-
-    // 4) Guardar solo si la respuesta es válida (no errores, no vacíos)
-    await saveToCache(cacheKey, data, ttl);
-
-    // 5) Devolver resultado
-    return res.status(200).json(data);
-  } catch (err) {
-    console.error("❌ Error API externa:", err.response?.data || err.message);
-    return res.status(err.response?.status || 500).json({
-      success: false,
-      message: "Error al consultar API externa",
-    });
-  } finally {
-    inflightKeys.delete(cacheKey);
-  }
-};
-
-/* ============================
-   Helper para endpoint con múltiples query params (dni_nombres)
-   Cache key basada en (nombres|apepaterno|apematerno)
-============================ */
-
-const fetchExternalGetMultiParamsWithCache = async ({
-  req,
-  res,
-  baseUrl,
-  externalPath,
-  requiredParams,
-}) => {
-  for (const p of requiredParams) {
-    const v = req.query[p];
-    if (!v || String(v).trim() === "") {
-      return res.status(400).json({ success: false, message: `${p} requerido` });
+    if (!id) {
+      return res
+        .status(400)
+        .json({ success: false, message: `${queryParam} requerido` });
     }
-  }
 
-  // Construir un ID compuesto estable para la caché
-  const compositeId = requiredParams
-    .map((p) => `${p}=${String(req.query[p]).trim()}`)
-    .join("&");
+    if (!validate(id)) {
+      return res.status(400).json({ success: false, message: invalidMessage });
+    }
 
-  const cacheKey = generateCacheKey(req.path, compositeId, "query");
+    // Prefijo "ec" para no colisionar con claves antiguas en la caché
+    const cacheKey = generateCacheKey(`/ec${req.path}`, id, queryParam);
 
-  // 1) Buscar en caché
-  const cached = await getFromCache(cacheKey);
-  if (cached) {
-    return res.status(200).json(cached);
-  }
+    // 1) Buscar en el sistema de caché
+    const cached = await getFromCache(cacheKey);
+    if (cached) {
+      return res.status(200).json(cached);
+    }
 
-  // 2) Protección anti-duplicado
-  if (inflightKeys.has(cacheKey)) {
-    console.log(`⏳ [INFLIGHT] Llamada duplicada detectada para: ${cacheKey}, esperando...`);
-    await new Promise((r) => setTimeout(r, 800));
-    const retryCache = await getFromCache(cacheKey);
-    if (retryCache) return res.status(200).json(retryCache);
-  }
+    // 2) Protección anti-duplicado
+    if (inflightKeys.has(cacheKey)) {
+      console.log(`⏳ [INFLIGHT] Llamada duplicada detectada para: ${cacheKey}, esperando...`);
+      await new Promise((r) => setTimeout(r, 800));
+      const retryCache = await getFromCache(cacheKey);
+      if (retryCache) return res.status(200).json(retryCache);
+    }
 
-  inflightKeys.add(cacheKey);
+    inflightKeys.add(cacheKey);
 
-  // 3) Llamar API externa GET
-  const url = `${baseUrl}${externalPath}`;
-  try {
-    console.log(`🔗 Llamando a API Externa: ${url} (${compositeId})`);
-    const response = await axios.get(url, { params: req.query });
-    const data = response.data;
+    // 3) Llamar al proveedor
+    try {
+      console.log(`🔗 Llamando al proveedor Ecuador: ${req.path}`);
+      const response = await ecuadorClient.get(buildPath(encodeURIComponent(id)));
+      const body = response.data;
 
-    const ttl = getTTL(req.path);
+      // El proveedor responde { data, error, message }: solo se cachea si trae datos y no hay error
+      if (body && body.data && !body.error) {
+        await saveToCache(cacheKey, body, getTTL(req.path));
+      } else {
+        console.log(`⏭️ [CACHÉ SKIP] Respuesta sin datos/con error del proveedor: ${cacheKey}`);
+      }
 
-    // 4) Guardar solo si la respuesta es válida
-    await saveToCache(cacheKey, data, ttl);
-
-    // 5) Devolver
-    return res.status(200).json(data);
-  } catch (err) {
-    console.error("❌ Error API externa:", err.response?.data || err.message);
-    return res.status(err.response?.status || 500).json({
-      success: false,
-      message: "Error al consultar API externa",
-    });
-  } finally {
-    inflightKeys.delete(cacheKey);
-  }
+      return res.status(200).json(body);
+    } catch (err) {
+      console.error("❌ Error proveedor Ecuador:", err.response?.status || err.message);
+      return res.status(err.response?.status || 500).json({
+        success: false,
+        message: "Error al consultar el servicio",
+      });
+    } finally {
+      inflightKeys.delete(cacheKey);
+    }
+  };
 };
+
+const isCedulaEC = (v) => /^\d{10}$/.test(v);
+const isRucEC = (v) => /^\d{13}$/.test(v);
+const isPlacaEC = (v) => /^[A-Za-z0-9-]{5,20}$/.test(v); // placa, CAMV, CPN o chasis
 
 /* ============================
    Endpoints con Lógica de Caché (EXISTENTES - NO TOCAR)
@@ -1016,129 +956,57 @@ app.get("/fiscalia-nombres", async (req, res) => {
 });
 
 /* ============================
-   ✅ NUEVOS 11 ENDPOINTS (GET) + Caché
+   ✅ ENDPOINTS ECUADOR (GET) + Caché Upstash
+   Proveedor: PROVEEDOR_ECUADOR (Bearer TOKEN_ECUADOR)
 ============================ */
 
-// 1) Consultar Cédula Venezolana (por número) - BASE1
-app.get("/cedula", async (req, res) => {
-  return fetchExternalGetWithCache({
-    req,
-    res,
-    baseUrl: URL_BASE1,
-    externalPath: "/cedula",
-    queryParam: "cedula",
-  });
-});
+// 1) Identificación: nombres y apellidos por cédula
+app.get("/cedula", ecuadorEndpoint({
+  queryParam: "cedula",
+  validate: isCedulaEC,
+  invalidMessage: "cedula inválida (10 dígitos)",
+  buildPath: (id) => `/cedulas/${id}/nombres`,
+}));
 
-// 2) Consultar Pasaporte - BASE1
-app.get("/pasaporte", async (req, res) => {
-  return fetchExternalGetWithCache({
-    req,
-    res,
-    baseUrl: URL_BASE1,
-    externalPath: "/pasaporte",
-    queryParam: "pasaporte",
-  });
-});
+// 2) Licencia de conducir (tipos, deudas y bloqueos) por cédula
+app.get("/licencia", ecuadorEndpoint({
+  queryParam: "cedula",
+  validate: isCedulaEC,
+  invalidMessage: "cedula inválida (10 dígitos)",
+  buildPath: (id) => `/cedulas/${id}/licencia`,
+}));
 
-// 3) Consultar Carnet de Extranjería - BASE1
-app.get("/carnet_extranjeria", async (req, res) => {
-  return fetchExternalGetWithCache({
-    req,
-    res,
-    baseUrl: URL_BASE1,
-    externalPath: "/carnet_extranjeria",
-    queryParam: "carnet_extranjeria",
-  });
-});
+// 3) Multas y citaciones de tránsito por cédula
+app.get("/multas", ecuadorEndpoint({
+  queryParam: "cedula",
+  validate: isCedulaEC,
+  invalidMessage: "cedula inválida (10 dígitos)",
+  buildPath: (id) => `/cedulas/${id}/multas`,
+}));
 
-// 4) Obtener DNI Peruano (Por Nombres y Apellidos) - BASE2
-app.get("/dni_nombres", async (req, res) => {
-  return fetchExternalGetMultiParamsWithCache({
-    req,
-    res,
-    baseUrl: URL_BASE2,
-    externalPath: "/dni_nombres",
-    requiredParams: ["nombres", "apepaterno", "apematerno"],
-  });
-});
+// 4) SRI: datos de un RUC
+app.get("/ruc", ecuadorEndpoint({
+  queryParam: "ruc",
+  validate: isRucEC,
+  invalidMessage: "ruc inválido (13 dígitos)",
+  buildPath: (id) => `/rucs/${id}`,
+}));
 
-// 5) Obtener Cédula Venezolana (Por Nombres) - BASE2
-app.get("/venezolanos_nombres", async (req, res) => {
-  return fetchExternalGetWithCache({
-    req,
-    res,
-    baseUrl: URL_BASE2,
-    externalPath: "/venezolanos_nombres",
-    queryParam: "query",
-  });
-});
+// 5) ANT: ficha completa del vehículo por placa
+app.get("/placa", ecuadorEndpoint({
+  queryParam: "placa",
+  validate: isPlacaEC,
+  invalidMessage: "placa inválida",
+  buildPath: (id) => `/placas/${id}`,
+}));
 
-// 6) Consulta Telefónica Bitel - BASE1
-app.get("/azura_bitel", async (req, res) => {
-  return fetchExternalGetWithCache({
-    req,
-    res,
-    baseUrl: URL_BASE1,
-    externalPath: "/azura_bitel",
-    queryParam: "query",
-  });
-});
-
-// 7) Consulta Telefónica Claro - BASE1
-app.get("/azura_claro", async (req, res) => {
-  return fetchExternalGetWithCache({
-    req,
-    res,
-    baseUrl: URL_BASE1,
-    externalPath: "/azura_claro",
-    queryParam: "query",
-  });
-});
-
-// 8) Consulta Telefónica Entel - BASE1
-app.get("/azura_entel", async (req, res) => {
-  return fetchExternalGetWithCache({
-    req,
-    res,
-    baseUrl: URL_BASE1,
-    externalPath: "/azura_entel",
-    queryParam: "query",
-  });
-});
-
-// 9) Consulta Telefónica Movistar - BASE1
-app.get("/azura_movistar", async (req, res) => {
-  return fetchExternalGetWithCache({
-    req,
-    res,
-    baseUrl: URL_BASE1,
-    externalPath: "/azura_movistar",
-    queryParam: "query",
-  });
-});
-
-// 10) Búsqueda por Dirección - BASE1
-app.get("/bdir", async (req, res) => {
-  return fetchExternalGetWithCache({
-    req,
-    res,
-    baseUrl: URL_BASE1,
-    externalPath: "/bdir",
-    queryParam: "direccion",
-  });
-});
-
-// 11) Consultar AFP - BASE1
-app.get("/afp", async (req, res) => {
-  return fetchExternalGetWithCache({
-    req,
-    res,
-    baseUrl: URL_BASE1,
-    externalPath: "/afp",
-    queryParam: "dni",
-  });
-});
+// 6) ANT: valores pendientes (citaciones impagas) por placa
+app.get("/placa_pendientes_ant", ecuadorEndpoint({
+  queryParam: "placa",
+  validate: isPlacaEC,
+  invalidMessage: "placa inválida",
+  buildPath: (id) => `/placas/${id}/pendientes/ant`,
+}));
 
 /* ============================
    Endpoint de salud (MODIFICADO: sin referencias a proveedores)
