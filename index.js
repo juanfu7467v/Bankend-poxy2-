@@ -446,6 +446,14 @@ const CACHE_TTL_VOLATILE = 60 * 60 * 24 * 7; // 7 días
 const VOLATILE_ENDPOINTS = new Set([
   "/multas",
   "/placa_pendientes_ant",
+  // Nuevos endpoints con datos que cambian con frecuencia
+  "/puntos",
+  "/placa_matriculacion",
+  "/placa_pendientes_sri",
+  "/placa_pendientes_amt",
+  "/placa_pendientes_atm",
+  "/placa_citaciones_atm",
+  "/placa_reporte",
 ]);
 
 // Set para bloquear llamadas duplicadas simultáneas al mismo key
@@ -695,6 +703,217 @@ app.get("/placa_pendientes_ant", ecuadorEndpoint({
   validate: isPlacaEC,
   invalidMessage: "placa inválida",
   buildPath: (id) => `/placas/${id}/pendientes/ant`,
+}));
+
+/* ============================================================
+   ➕ ENDPOINTS AÑADIDOS (rutas verificadas en ecuadorapi.com/docs)
+   Mismo helper, misma caché, misma seguridad que los anteriores.
+============================================================ */
+
+/* ---------- PERSONAS (por cédula) ---------- */
+
+// Sexo
+app.get("/sexo", ecuadorEndpoint({
+  queryParam: "cedula",
+  validate: isCedulaEC,
+  invalidMessage: "cedula inválida (10 dígitos)",
+  buildPath: (id) => `/cedulas/${id}/sexo`,
+}));
+
+// Fecha de nacimiento y edad
+app.get("/nacimiento", ecuadorEndpoint({
+  queryParam: "cedula",
+  validate: isCedulaEC,
+  invalidMessage: "cedula inválida (10 dígitos)",
+  buildPath: (id) => `/cedulas/${id}/nacimiento`,
+}));
+
+// Lugar de nacimiento (parroquia, cantón, provincia)
+app.get("/lugar_nacimiento", ecuadorEndpoint({
+  queryParam: "cedula",
+  validate: isCedulaEC,
+  invalidMessage: "cedula inválida (10 dígitos)",
+  buildPath: (id) => `/cedulas/${id}/lugar_nacimiento`,
+}));
+
+// Estado civil y cónyuge
+app.get("/estado_civil", ecuadorEndpoint({
+  queryParam: "cedula",
+  validate: isCedulaEC,
+  invalidMessage: "cedula inválida (10 dígitos)",
+  buildPath: (id) => `/cedulas/${id}/estado_civil`,
+}));
+
+// Nacionalidad
+app.get("/nacionalidad", ecuadorEndpoint({
+  queryParam: "cedula",
+  validate: isCedulaEC,
+  invalidMessage: "cedula inválida (10 dígitos)",
+  buildPath: (id) => `/cedulas/${id}/nacionalidad`,
+}));
+
+// Profesión e instrucción
+app.get("/profesion", ecuadorEndpoint({
+  queryParam: "cedula",
+  validate: isCedulaEC,
+  invalidMessage: "cedula inválida (10 dígitos)",
+  buildPath: (id) => `/cedulas/${id}/profesion`,
+}));
+
+// Nombre del padre
+app.get("/padre", ecuadorEndpoint({
+  queryParam: "cedula",
+  validate: isCedulaEC,
+  invalidMessage: "cedula inválida (10 dígitos)",
+  buildPath: (id) => `/cedulas/${id}/padre`,
+}));
+
+// Nombre de la madre
+app.get("/madre", ecuadorEndpoint({
+  queryParam: "cedula",
+  validate: isCedulaEC,
+  invalidMessage: "cedula inválida (10 dígitos)",
+  buildPath: (id) => `/cedulas/${id}/madre`,
+}));
+
+// Defunción
+app.get("/defuncion", ecuadorEndpoint({
+  queryParam: "cedula",
+  validate: isCedulaEC,
+  invalidMessage: "cedula inválida (10 dígitos)",
+  buildPath: (id) => `/cedulas/${id}/defuncion`,
+}));
+
+// Puntos de la licencia (vigentes + historial)
+app.get("/puntos", ecuadorEndpoint({
+  queryParam: "cedula",
+  validate: isCedulaEC,
+  invalidMessage: "cedula inválida (10 dígitos)",
+  buildPath: (id) => `/cedulas/${id}/puntos`,
+}));
+
+/* ---------- EMPRESAS (por RUC) ---------- */
+
+// Agente de retención
+app.get("/agente_retencion", ecuadorEndpoint({
+  queryParam: "ruc",
+  validate: isRucEC,
+  invalidMessage: "ruc inválido (13 dígitos)",
+  buildPath: (id) => `/rucs/${id}/agente-retencion`,
+}));
+
+// Contribuyente especial
+app.get("/contribuyente_especial", ecuadorEndpoint({
+  queryParam: "ruc",
+  validate: isRucEC,
+  invalidMessage: "ruc inválido (13 dígitos)",
+  buildPath: (id) => `/rucs/${id}/contribuyente-especial`,
+}));
+
+/* ---------- VEHÍCULOS (por placa / CAMV / CPN / chasis) ---------- */
+
+// Ficha básica del vehículo (sin titular ni valores pendientes)
+app.get("/placa_vehiculo", ecuadorEndpoint({
+  queryParam: "placa",
+  validate: isPlacaEC,
+  invalidMessage: "placa inválida",
+  buildPath: (id) => `/placas/${id}/vehiculo`,
+}));
+
+// Propietario (titular según la ANT)
+app.get("/placa_propietario", ecuadorEndpoint({
+  queryParam: "placa",
+  validate: isPlacaEC,
+  invalidMessage: "placa inválida",
+  buildPath: (id) => `/placas/${id}/propietario`,
+}));
+
+// Estado de matriculación
+app.get("/placa_matriculacion", ecuadorEndpoint({
+  queryParam: "placa",
+  validate: isPlacaEC,
+  invalidMessage: "placa inválida",
+  buildPath: (id) => `/placas/${id}/matriculacion`,
+}));
+
+// Valores pendientes — SRI
+app.get("/placa_pendientes_sri", ecuadorEndpoint({
+  queryParam: "placa",
+  validate: isPlacaEC,
+  invalidMessage: "placa inválida",
+  buildPath: (id) => `/placas/${id}/pendientes/sri`,
+}));
+
+// Valores pendientes — AMT (Quito)
+app.get("/placa_pendientes_amt", ecuadorEndpoint({
+  queryParam: "placa",
+  validate: isPlacaEC,
+  invalidMessage: "placa inválida",
+  buildPath: (id) => `/placas/${id}/pendientes/amt`,
+}));
+
+// Valores pendientes — ATM (Guayaquil)
+app.get("/placa_pendientes_atm", ecuadorEndpoint({
+  queryParam: "placa",
+  validate: isPlacaEC,
+  invalidMessage: "placa inválida",
+  buildPath: (id) => `/placas/${id}/pendientes/atm`,
+}));
+
+// Citaciones ATM (Guayaquil)
+app.get("/placa_citaciones_atm", ecuadorEndpoint({
+  queryParam: "placa",
+  validate: isPlacaEC,
+  invalidMessage: "placa inválida",
+  buildPath: (id) => `/placas/${id}/citaciones/atm`,
+}));
+
+// Historial de pagos de matrícula y transferencias
+app.get("/placa_pagos", ecuadorEndpoint({
+  queryParam: "placa",
+  validate: isPlacaEC,
+  invalidMessage: "placa inválida",
+  buildPath: (id) => `/placas/${id}/pagos`,
+}));
+
+// Historial de dueños
+app.get("/placa_duenos", ecuadorEndpoint({
+  queryParam: "placa",
+  validate: isPlacaEC,
+  invalidMessage: "placa inválida",
+  buildPath: (id) => `/placas/${id}/duenos`,
+}));
+
+// Imagen referencial del modelo (gratis en el proveedor)
+app.get("/placa_imagen", ecuadorEndpoint({
+  queryParam: "placa",
+  validate: isPlacaEC,
+  invalidMessage: "placa inválida",
+  buildPath: (id) => `/placas/${id}/imagen`,
+}));
+
+// Número de chasis / VIN
+app.get("/placa_chasis", ecuadorEndpoint({
+  queryParam: "placa",
+  validate: isPlacaEC,
+  invalidMessage: "placa inválida",
+  buildPath: (id) => `/placas/${id}/chasis`,
+}));
+
+// Número de motor
+app.get("/placa_motor", ecuadorEndpoint({
+  queryParam: "placa",
+  validate: isPlacaEC,
+  invalidMessage: "placa inválida",
+  buildPath: (id) => `/placas/${id}/motor`,
+}));
+
+// Reporte completo (premium: ficha, titular, pagos, multas, dueños, chasis, imagen)
+app.get("/placa_reporte", ecuadorEndpoint({
+  queryParam: "placa",
+  validate: isPlacaEC,
+  invalidMessage: "placa inválida",
+  buildPath: (id) => `/placas/${id}/reporte`,
 }));
 
 /* ============================
