@@ -1,7 +1,7 @@
 {
   "name": "consulta-pe-api",
   "version": "1.0.0",
-  "description": "API para consultas con Factiliza, desplegada en Railway",
+  "description": "API de consultas de Ecuador (EcuadorAPI) con caché Upstash Redis, desplegada en Fly.io",
   "main": "index.js",
   "type": "module",
   "scripts": {
@@ -10,10 +10,12 @@
   },
   "keywords": [
     "consulta",
-    "factiliza",
-    "railway",
+    "ecuador",
+    "ecuadorapi",
+    "fly.io",
     "api",
-    "dni"
+    "cedula",
+    "ruc"
   ],
   "author": "Consulta PE",
   "license": "MIT",
