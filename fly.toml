@@ -1,10 +1,10 @@
-# fly.toml app configuration file generated for vankend-poxy2 on 2026-09-28T02:29:21Z
+# fly.toml app configuration file generated for vankend-poxy2 on 2026-09-28T02:47:57Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
 app = 'vankend-poxy2'
-primary_region = 'ams'
+primary_region = 'gru'
 
 [build]
 
