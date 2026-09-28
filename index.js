@@ -10,9 +10,6 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Variables de configuración del servicio externo
-const TOKEN_LEDER = process.env.TOKEN_LEDER;
-
 // ✅ Proveedor Ecuador (desde secrets / env de Fly.io)
 const PROVEEDOR_ECUADOR = (process.env.PROVEEDOR_ECUADOR || "").replace(/\/+$/, ""); // https://api.ecuadorapi.com/api/v1
 const TOKEN_ECUADOR = process.env.TOKEN_ECUADOR;
@@ -47,24 +44,10 @@ const redis = new Redis({
 ============================ */
 
 const SENSITIVE_LOG_KEYS = new Set([
-  "dni",
-  "ruc",
-  "telefono",
-  "teléfono",
-  "numero",
-  "número",
-  "documento",
-  "doc",
   "cedula",
   "cédula",
-  "pasaporte",
-  "carnet_extranjeria",
+  "ruc",
   "placa",
-  "query",
-  "data",
-  "nombres",
-  "apepaterno",
-  "apematerno",
   "correo",
   "email",
   "ip",
@@ -150,11 +133,11 @@ const anonymizeSensitiveText = (text) => {
 
   // Anonimizar parámetros sensibles en textos tipo query string o trazas
   sanitized = sanitized.replace(
-    /((?:dni|ruc|telefono|tel[eé]fono|numero|n[uú]mero|documento|doc|cedula|c[eé]dula|pasaporte|carnet_extranjeria|placa|query|data|nombres|apepaterno|apematerno|correo|email|ip)=)([^&\s]+)/gi,
+    /((?:cedula|c[eé]dula|ruc|placa|correo|email|ip)=)([^&\s]+)/gi,
     (_, prefix, value) => `${prefix}${anonymizeSensitiveValue(decodeURIComponentSafe(value))}`
   );
 
-  // Anonimizar secuencias numéricas largas (DNI, RUC, teléfonos, etc.)
+  // Anonimizar secuencias numéricas largas (cédulas, RUC, etc.)
   sanitized = sanitized.replace(/\b\d{7,}\b/g, (match) =>
     anonymizeNumericIdentifier(match)
   );
@@ -454,17 +437,13 @@ app.use(automatedQueryProtection);
    Constantes de caché
 ============================ */
 
-// TTL en segundos: 30 días para datos estables (DNI, RENIEC, RUC, etc.)
+// TTL en segundos: 30 días para datos estables (cédula, RUC, placa, etc.)
 const CACHE_TTL_DEFAULT = 60 * 60 * 24 * 30; // 30 días
-// TTL más corto para datos volátiles (teléfonos, movimientos, consumos)
+// TTL más corto para datos volátiles (multas, valores pendientes)
 const CACHE_TTL_VOLATILE = 60 * 60 * 24 * 7; // 7 días
 
 // Endpoints que consideramos volátiles (datos que cambian con frecuencia)
 const VOLATILE_ENDPOINTS = new Set([
-  "/movimientos",
-  "/consumos",
-  "/telefonia-num",
-  "/telefonia-doc",
   "/multas",
   "/placa_pendientes_ant",
 ]);
@@ -475,17 +454,6 @@ const inflightKeys = new Set();
 /* ============================
    Funciones auxiliares para el sistema de caché
 ============================ */
-
-/**
- * Limpia la respuesta del servicio externo removiendo los campos de metadata
- */
-const cleanLederDataResponse = (data) => {
-  if (!data || typeof data !== "object") return data;
-  const cleanedData = { ...data };
-  delete cleanedData["developed-by"];
-  delete cleanedData["credits"];
-  return cleanedData;
-};
 
 /**
  * Determina el TTL correcto para un endpoint dado
@@ -523,7 +491,6 @@ const isValidDataForCache = (data) => {
     "creditos insuficientes",
     "sin creditos",
     "saldo insuficiente",
-    "error leder",
     "error al consultar",
     "error interno",
     "token inv", // "token inválido"
@@ -545,17 +512,6 @@ const isValidDataForCache = (data) => {
   }
 
   return true;
-};
-
-/**
- * Verifica si la respuesta del servicio externo es un error explícito
- */
-const isErrorResponse = (data) => {
-  return (
-    data &&
-    data.success === false &&
-    data.message === "Error al consultar el servicio"
-  );
 };
 
 /**
@@ -608,187 +564,6 @@ const saveToCache = async (key, data, ttl = CACHE_TTL_DEFAULT) => {
 const generateCacheKey = (endpoint, id, paramName) => {
   const endpointName = endpoint.substring(1).replace(/\//g, ":");
   return `${endpointName}:${paramName}:${id}`;
-};
-
-/* ============================
-   Función centralizada para manejar el servicio externo (antes LederData)
-============================ */
-
-const fetchFromLederData = async (
-  req,
-  res,
-  lederDataPath,
-  payload,
-  id,
-  paramName = "dni"
-) => {
-  try {
-    const url = `https://leder-data-api.ngrok.dev/v1.7${lederDataPath}`;
-    console.log(
-      `🔗 Llamando a intermediario tecnológico Masitaprex: ${req.path} para ${paramName}=${id}`
-    );
-
-    const postPayload = {
-      ...payload,
-      token: TOKEN_LEDER,
-    };
-
-    const response = await axios.post(url, postPayload);
-    const resultData = response.data;
-
-    // Verificar si es una respuesta de error
-    if (isErrorResponse(resultData)) {
-      console.log(`❌ Respuesta de error del servicio, NO se guarda en caché: ${id}`);
-      return res.status(200).json(resultData);
-    }
-
-    // Limpiar la respuesta antes de guardarla
-    const cleanedData = cleanLederDataResponse(resultData);
-
-    // Guardar en caché con TTL apropiado
-    if (id) {
-      const cacheKey = generateCacheKey(req.path, id, paramName);
-      const ttl = getTTL(req.path);
-      await saveToCache(cacheKey, cleanedData, ttl);
-    }
-
-    return res.status(200).json(resultData); // Devolver la respuesta original al usuario
-  } catch (err) {
-    console.error("❌ Error en el servicio externo:", err.response?.data || err.message);
-    return res.status(err.response?.status || 500).json({
-      success: false,
-      message: "Error al consultar el servicio",
-    });
-  }
-};
-
-/* ============================
-   Middleware para endpoints con caché (servicio externo)
-============================ */
-
-const cacheableEndpoint = (lederDataPath, paramName = "dni") => {
-  return async (req, res) => {
-    const id = req.query[paramName];
-    if (!id) {
-      return res
-        .status(400)
-        .json({ success: false, message: `${paramName} requerido` });
-    }
-
-    // 1. Buscar en caché
-    const cacheKey = generateCacheKey(req.path, id, paramName);
-    const cachedResult = await getFromCache(cacheKey);
-
-    if (cachedResult) {
-      return res.status(200).json(cachedResult);
-    }
-
-    // 2. Protección anti-duplicado: si ya hay una llamada en vuelo para esta clave,
-    //    esperamos brevemente y reintentamos la caché antes de volver a llamar.
-    if (inflightKeys.has(cacheKey)) {
-      console.log(`⏳ [INFLIGHT] Llamada duplicada detectada para: ${cacheKey}, esperando...`);
-      await new Promise((r) => setTimeout(r, 800));
-      const retryCache = await getFromCache(cacheKey);
-      if (retryCache) return res.status(200).json(retryCache);
-    }
-
-    inflightKeys.add(cacheKey);
-
-    // 3. No hay caché, llamar al servicio externo
-    const payload = { [paramName]: id };
-
-    if (req.path === "/reniec") {
-      payload.source = req.query.source || "database";
-    }
-
-    try {
-      if (req.path === "/sunat" || req.path === "/sunat-razon") {
-        await fetchFromLederData(req, res, lederDataPath, { data: id }, id, paramName);
-      } else {
-        await fetchFromLederData(req, res, lederDataPath, payload, id, paramName);
-      }
-    } finally {
-      inflightKeys.delete(cacheKey);
-    }
-  };
-};
-
-/* ============================
-   Transformación para la API externa de árbol genealógico
-============================ */
-
-const transformArbolDataToFamilyFormat = (apiResponse) => {
-  if (
-    !apiResponse ||
-    apiResponse.message !== "found data" ||
-    !apiResponse.result ||
-    !apiResponse.result.coincidences
-  ) {
-    console.warn("⚠️ Respuesta de la API de Árbol Genealógico no válida o vacía.");
-    return {
-      success: false,
-      message: "No se encontraron coincidencias o la respuesta fue inválida.",
-    };
-  }
-
-  const { person, coincidences } = apiResponse.result;
-
-  const transformedData = {
-    dni: person.dni,
-    apellidos_nombres: `${person.ap} ${person.am} ${person.nom}`,
-    edad: person.edad,
-    success: true,
-    message: "Datos de Árbol Genealógico (API Externa) obtenidos y transformados.",
-    familia: coincidences.map((c) => ({
-      dni: c.dni,
-      apellidos_nombres: `${c.ap} ${c.am} ${c.nom}`,
-      edad: c.edad,
-      relacion_tipo: c.tipo,
-      relacion_detalle: c.verificacion_relacion,
-      fec_emision: null,
-      est_civil: null,
-      departamento: null,
-    })),
-  };
-
-  return transformedData;
-};
-
-/**
- * Función para la nueva API externa del árbol genealógico con caché
- */
-const fetchFromExternalArbolAPI = async (req, res, id) => {
-  const url = `https://banckend-poxyv1-cosultape-masitaprex.fly.dev/arbol?dni=${id}`;
-
-  try {
-    // 1. Buscar en caché primero
-    const cacheKey = generateCacheKey(req.path, id, "dni");
-    const cachedResult = await getFromCache(cacheKey);
-
-    if (cachedResult) {
-      return res.status(200).json(cachedResult);
-    }
-
-    // 2. No hay caché, llamar a la API externa
-    console.log(`🔗 Llamando a API Externa de Árbol Genealógico: ${url}`);
-    const response = await axios.get(url);
-    const apiResponse = response.data;
-
-    // 3. Transformar la respuesta
-    const transformedData = transformArbolDataToFamilyFormat(apiResponse);
-
-    // 4. Guardar en caché solo si es exitoso
-    await saveToCache(cacheKey, transformedData, CACHE_TTL_DEFAULT);
-
-    // 5. Devolver el resultado transformado
-    return res.status(200).json(transformedData);
-  } catch (err) {
-    console.error("❌ API Árbol Genealógico Externo error:", err.response?.data || err.message);
-    return res.status(err.response?.status || 500).json({
-      success: false,
-      message: "Error al consultar la API externa del Árbol Genealógico",
-    });
-  }
 };
 
 /* ============================
@@ -868,92 +643,6 @@ const ecuadorEndpoint = ({ queryParam, validate, buildPath, invalidMessage }) =>
 const isCedulaEC = (v) => /^\d{10}$/.test(v);
 const isRucEC = (v) => /^\d{13}$/.test(v);
 const isPlacaEC = (v) => /^[A-Za-z0-9-]{5,20}$/.test(v); // placa, CAMV, CPN o chasis
-
-/* ============================
-   Endpoints con Lógica de Caché (EXISTENTES - NO TOCAR)
-============================ */
-
-// Endpoints de persona
-app.get("/reniec", cacheableEndpoint("/persona/reniec", "dni"));
-app.get("/denuncias-dni", cacheableEndpoint("/persona/denuncias-policiales-dni", "dni"));
-app.get("/sueldos", cacheableEndpoint("/persona/sueldos", "dni"));
-app.get("/trabajos", cacheableEndpoint("/persona/trabajos", "dni"));
-app.get("/consumos", cacheableEndpoint("/persona/consumos", "dni"));
-app.get("/arbol", cacheableEndpoint("/persona/arbol-genealogico", "dni"));
-
-// Endpoints de familia
-app.get("/familia1", cacheableEndpoint("/persona/familia-1", "dni"));
-app.get("/familia2", cacheableEndpoint("/persona/familia-2", "dni"));
-app.get("/familia3", cacheableEndpoint("/persona/familia-3", "dni"));
-
-// Otros endpoints de persona
-app.get("/movimientos", cacheableEndpoint("/persona/movimientos-migratorios", "dni"));
-app.get("/matrimonios", cacheableEndpoint("/persona/matrimonios", "dni"));
-app.get("/empresas", cacheableEndpoint("/persona/empresas", "dni"));
-app.get("/direcciones", cacheableEndpoint("/persona/direcciones", "dni"));
-app.get("/correos", cacheableEndpoint("/persona/correos", "dni"));
-app.get("/fiscalia-dni", cacheableEndpoint("/persona/justicia/fiscalia/dni", "dni"));
-
-// Endpoints de vehículos
-app.get("/denuncias-placa", cacheableEndpoint("/persona/denuncias-policiales-placa", "placa"));
-app.get("/vehiculos", cacheableEndpoint("/vehiculos/sunarp", "placa"));
-
-// Endpoints de empresa
-app.get("/sunat", cacheableEndpoint("/empresa/sunat", "data"));
-app.get("/sunat-razon", cacheableEndpoint("/empresa/sunat/razon-social", "data"));
-
-// Endpoints de telefonia
-app.get("/telefonia-doc", cacheableEndpoint("/telefonia/documento", "documento"));
-app.get("/telefonia-num", cacheableEndpoint("/telefonia/numero", "numero"));
-
-/* ============================
-   Endpoint para API externa de árbol genealógico (EXISTENTE)
-============================ */
-app.get("/arbol-genealogico-externo", async (req, res) => {
-  const id = req.query.dni;
-  if (!id) {
-    return res.status(400).json({ success: false, message: "dni requerido" });
-  }
-
-  await fetchFromExternalArbolAPI(req, res, id);
-});
-
-/* ============================
-   Endpoint sin caché por ID (búsqueda por nombres) (EXISTENTE)
-============================ */
-app.get("/fiscalia-nombres", async (req, res) => {
-  if (!req.query.nombres || !req.query.apepaterno || !req.query.apematerno) {
-    return res.status(400).json({
-      success: false,
-      message: "nombres, apepaterno y apematerno requeridos",
-    });
-  }
-
-  try {
-    const url = `https://leder-data-api.ngrok.dev/v1.7/persona/justicia/fiscalia/nombres`;
-    console.log(`🔗 Llamando a intermediario tecnológico Masitaprex: ${req.path} para búsqueda por nombres`);
-
-    const postPayload = {
-      nombres: req.query.nombres,
-      apepaterno: req.query.apepaterno,
-      apematerno: req.query.apematerno,
-      token: TOKEN_LEDER,
-    };
-
-    const response = await axios.post(url, postPayload);
-    const resultData = response.data;
-
-    const cleanedData = cleanLederDataResponse(resultData);
-
-    return res.status(200).json(cleanedData);
-  } catch (err) {
-    console.error("❌ Error en el servicio externo:", err.response?.data || err.message);
-    return res.status(err.response?.status || 500).json({
-      success: false,
-      message: "Error al consultar el servicio",
-    });
-  }
-});
 
 /* ============================
    ✅ ENDPOINTS ECUADOR (GET) + Caché Upstash
