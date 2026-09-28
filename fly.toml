@@ -1,15 +1,15 @@
-# fly.toml app configuration file generated for banckend-poxyv1-cosultape-masitaprex on 2026-06-17T01:06:41Z
+# fly.toml app configuration file generated for vankend-poxy2 on 2026-09-28T02:29:21Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'banckend-poxyv1-cosultape-masitaprex'
-primary_region = 'iad'
+app = 'vankend-poxy2'
+primary_region = 'ams'
 
 [build]
 
 [http_service]
-  internal_port = 3000
+  internal_port = 8080
   force_https = true
   auto_stop_machines = 'stop'
   auto_start_machines = true
